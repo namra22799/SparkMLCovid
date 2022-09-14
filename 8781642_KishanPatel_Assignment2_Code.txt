@@ -124,7 +124,6 @@ val Predictions = cvModel.transform(testData)
 val Accuracy = DataEvaluator.evaluate(Predictions)
 println("Accuracy on Test Data =" + Accuracy)
 
-Predictions.select(col("Index_Result"),
  col("Index_AgeGroup"),
  col("Index_Sex"),
  col("Index_CurrentICU"),
@@ -134,3 +133,5 @@ Predictions.select(col("Index_Result"),
   .write
   .format("csv")
   .save("hdfs://10.128.0.24:8020/BigData/CovidData/predictive_model.csv")
+
+xyz
