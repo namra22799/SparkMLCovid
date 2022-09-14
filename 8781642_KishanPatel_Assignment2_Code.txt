@@ -1,0 +1,136 @@
+-----------------------------------------------------------
+-----------------------------------------------------------
+------- Submitted By: Kishan Kanaiyalal Patel -------------
+--------------- Student ID: 8781642 -----------------------
+------ Big Data Solution Architecture (Section-1) ---------
+---------- Submitted to: Prof. Saber Amini ----------------
+------------------ April 23, 2022 -------------------------
+-----------------------------------------------------------
+-----------------------------------------------------------
+
+Machine Learning Predictive Model using SparkML
+
+-----------------------------------------------------------
+-----------------------------------------------------------
+
+
+spark-shell --master yarn
+
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.ml.feature.OneHotEncoder
+import org.apache.spark.ml.feature.{VectorAssembler, StringIndexer}
+import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.classification.{RandomForestClassificationModel, RandomForestClassifier}
+import org.apache.spark.ml.tuning.{CrossValidator, CrossValidatorModel, ParamGridBuilder}
+import org.apache.spark.ml.evaluation.{MulticlassClassificationEvaluator}
+import org.apache.spark.ml.param.ParamMap
+import org.apache.spark.sql.types.{IntegerType, DoubleType}
+
+
+val dataset=spark.read
+	.format("csv")
+	.option("header","true")
+	.load("hdfs://10.128.0.24:8020/BigData/CovidData/Toronto_COVID19.csv")
+
+
+val CleanedData= dataset.na.drop()
+
+CleanedData.show(20)
+CleanedData.printSchema()
+
+val SelectedData= CleanedData.select(col("Age Group"),
+ col("Client Gender").alias("Sex"),
+ col("Currently in ICU"),
+ col("Ever Hospitalized"),
+ col("Ever in ICU"),
+ col("Outcome").alias("Result"))
+ .filter(CleanedData("Classification")==="CONFIRMED")
+ 
+SelectedData.show(20)
+
+val FatalCases= SelectedData.filter(SelectedData("Result")==="FATAL")
+val ResolvedCases= SelectedData.filter(SelectedData("Result")==="RESOLVED")
+
+val FatalRatio=FatalCases.count().toDouble/SelectedData.count().toDouble
+val ResolvedSampleRatio= ResolvedCases.sample(false,FatalRatio)
+val BalancedData= FatalCases.unionAll(ResolvedSampleRatio)
+
+BalancedData.show(20)
+
+val inputIndex= Array("Age Group", "Sex", "Currently in ICU", "Ever Hospitalized", "Ever in ICU")
+val outputIndex= Array("Index_AgeGroup","Index_Sex","Index_CurrentICU","Index_EverHospital", "Index_EverICU")
+
+val StringToIndex = new StringIndexer()
+StringToIndex.setInputCols(inputIndex)
+StringToIndex.setOutputCols(outputIndex)
+
+val StringToIndex2= new StringIndexer()
+.setInputCol("Result")
+.setOutputCol("Index_Result")
+
+val IndexedData= StringToIndex.fit(BalancedData).transform(BalancedData)
+val IndexedData_2= StringToIndex2.fit(IndexedData).transform(IndexedData)
+
+val rankData= IndexedData_2.select(col("Index_Result").cast(IntegerType),
+ col("Index_AgeGroup").cast(IntegerType),
+ col("Index_Sex").cast(IntegerType),
+ col("Index_CurrentICU").cast(IntegerType),
+ col("Index_EverHospital").cast(IntegerType),
+ col("Index_EverICU").cast(IntegerType))
+ 
+rankData.show(20)
+
+val HotEncoder= new OneHotEncoder()
+.setInputCols(Array("Index_AgeGroup","Index_Sex","Index_CurrentICU","Index_EverHospital", "Index_EverICU"))
+.setOutputCols(Array("Encode_AgeGroup","Encode_Sex","Encode_CurrentICU","Encode_EverHospital", "Encode_EverICU"))
+
+val DataEncoder= HotEncoder.fit(rankData).transform(rankData)
+DataEncoder.show(20)
+
+val Array(trainingData,testData)= DataEncoder.randomSplit(Array(0.7,0.3),754)
+
+val DataAssembler = new VectorAssembler()
+.setInputCols(Array("Encode_AgeGroup","Encode_Sex","Encode_CurrentICU","Encode_EverHospital", "Encode_EverICU",
+"Index_AgeGroup","Index_Sex","Index_CurrentICU","Index_EverHospital", "Index_EverICU"))
+.setOutputCol("assembled-features")
+
+val Random_Forest =new RandomForestClassifier()
+.setFeaturesCol("assembled-features")
+.setLabelCol("Index_Result")
+.setSeed(1234)
+
+val DataPipeline = new Pipeline()
+.setStages(Array(DataAssembler,Random_Forest))
+
+val DataEvaluator = new MulticlassClassificationEvaluator()
+.setLabelCol("Index_Result")
+.setPredictionCol("prediction")
+.setMetricName("accuracy")
+
+val DataParamGrid = new ParamGridBuilder()
+.addGrid(Random_Forest.maxDepth,Array(3,5))
+.addGrid(Random_Forest.impurity,Array("entropy","gini")).build()
+
+val cross_validator= new CrossValidator()
+.setEstimator(DataPipeline)
+.setEvaluator(DataEvaluator)
+.setEstimatorParamMaps(DataParamGrid)
+.setNumFolds(3)
+
+val cvModel = cross_validator.fit(trainingData)
+val Predictions = cvModel.transform(testData)
+
+val Accuracy = DataEvaluator.evaluate(Predictions)
+println("Accuracy on Test Data =" + Accuracy)
+
+Predictions.select(col("Index_Result"),
+ col("Index_AgeGroup"),
+ col("Index_Sex"),
+ col("Index_CurrentICU"),
+ col("Index_EverHospital"),
+ col("Index_EverICU"),
+ col("Prediction"))
+  .write
+  .format("csv")
+  .save("hdfs://10.128.0.24:8020/BigData/CovidData/predictive_model.csv")
