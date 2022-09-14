@@ -135,3 +135,5 @@ println("Accuracy on Test Data =" + Accuracy)
   .save("hdfs://10.128.0.24:8020/BigData/CovidData/predictive_model.csv")
 
 xyz
+
+asdgfdsav
